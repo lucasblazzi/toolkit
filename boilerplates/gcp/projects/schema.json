@@ -1,0 +1,31 @@
+{
+  "tables": [
+    {
+      "table_name": "customer-credit",
+      "file_patterns": [
+        "Customer Data.csv"
+      ],
+      "columns": [
+        { "column_name": "CUST_ID",                             "type_name": "STRING"  },
+        { "column_name": "BALANCE",                             "type_name": "NUMERIC" },
+        { "column_name": "BALANCE_FREQUENCY",                   "type_name": "NUMERIC" },
+        { "column_name": "PURCHASES",                           "type_name": "NUMERIC" },
+        { "column_name": "ONEOFF_PURCHASES",                    "type_name": "NUMERIC" },
+        { "column_name": "INSTALLMENTS_PURCHASES",              "type_name": "NUMERIC" },
+        { "column_name": "CASH_ADVANCE",                        "type_name": "NUMERIC" },
+        { "column_name": "PURCHASES_FREQUENCY",                 "type_name": "NUMERIC" },
+        { "column_name": "ONEOFF_PURCHASES_FREQUENCY",          "type_name": "NUMERIC" },
+        { "column_name": "PURCHASES_INSTALLMENTS_FREQUENCY",    "type_name": "NUMERIC" },
+        { "column_name": "CASH_ADVANCE_FREQUENCY",              "type_name": "NUMERIC" },
+        { "column_name": "CASH_ADVANCE_TRX",                    "type_name": "INT64"   },
+        { "column_name": "PURCHASES_TRX",                       "type_name": "INT64"   },
+        { "column_name": "CREDIT_LIMIT",                        "type_name": "NUMERIC" },
+        { "column_name": "PAYMENTS",                            "type_name": "NUMERIC" },
+        { "column_name": "MINIMUM_PAYMENTS",                    "type_name": "NUMERIC" },
+        { "column_name": "PRC_FULL_PAYMENT",                    "type_name": "NUMERIC" },
+        { "column_name": "TENURE",                              "type_name": "INT64"   }
+      ]
+    }
+  ],
+  "dialect": "GOOGLE_STANDARD_SQL"
+}

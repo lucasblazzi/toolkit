@@ -1,0 +1,556 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CloudFormation for infrastructure of Atlas API
+
+Parameters:
+  AccountSelected:
+    Type: String
+    Description: Account number and region name for resource mapping
+  Role:
+    Type: String
+    Description: Role used on aws lambdas.
+  ApiGatewayRole:
+    Type: String
+    Description: Role with permissions for api gateway
+  JwtExpirationHours:
+    Type: Number
+    Description: hours to expire jwt token
+  JwtAlgorithm:
+    Type: String
+    Description: Algorithm to encode/decode jwt tokens
+  CORSOrigin:
+    Type: String
+    Description: String of origins to return on lambda header.
+  CORSMethods:
+    Type: String
+    Description: String containing the HTTP methods to allow.
+  CORSHeaders:
+    Type: String
+    Description: String of headers to allow.
+  DomainName:
+    Type: String
+    Description: Api domain name
+  DomainNameDocs:
+    Type: String
+    Description: Api docs domain name
+  CertificateArn:
+    Type: String
+    Description: Certificate for domain name
+  Stage:
+    Type: String
+    Description: Current API stage name
+
+Mappings:
+  AccountIdRegionMap:
+    166714175444-us-east-1:
+      LogLevel: INFO
+      EnvironmentName: dev
+      SecurityGroupIds:
+        - sg-0d89e11889087f5e6
+      SubnetIds:
+        - subnet-01df436f599dacbeb
+        - subnet-0003a205c6739f3f6
+        - subnet-0a707f1c5d868a878
+    205153774795-us-east-1:
+      LogLevel: INFO
+      EnvironmentName: uat
+      SecurityGroupIds:
+        - sg-0e4476b71d7f6350b
+      SubnetIds:
+        - subnet-09284e38b84d90166
+        - subnet-03b89a922b2b1b2e4
+        - subnet-0c550bbaabd0178d3
+    760919482303-us-east-1:
+      LogLevel: ERROR
+      EnvironmentName: prd
+      SecurityGroupIds:
+        - sg-01da47d9704ac72b1
+      SubnetIds:
+        - subnet-0677af9cb6b851a2a
+        - subnet-0988899c55d8fa13f
+
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: python3.11
+    Environment:
+      Variables:
+        LOG_LEVEL:
+          !FindInMap [AccountIdRegionMap, !Ref AccountSelected, LogLevel]
+        POWERTOOLS_LOGGER_SAMPLE_RATE: 0.1
+        POWERTOOLS_LOGGER_LOG_EVENT: true
+        POWERTOOLS_METRICS_NAMESPACE: ATLAS-API-INFRASTRUCTURE
+        POWERTOOLS_SERVICE_NAME: ATLAS-API-INFRASTRUCTURE
+    Tags:
+      env: !Sub
+        - ${EnvName}
+        - EnvName:
+            !FindInMap [
+              AccountIdRegionMap,
+              !Ref AccountSelected,
+              EnvironmentName,
+            ]
+      service_group: atlas
+      service: atlas-api-infrastructure
+      risk_exposure: Low
+      business_criticality: Medium
+      product_name: portfolio-strategy
+      product_team: portfolio-services
+      system_name: atlas
+
+Resources:
+  SecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Management API secrets, credentials and tokens
+      Name: atlas-api
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: jwt_key
+        PasswordLength: 32
+
+  DynamoDBUsers:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: TB_ATLAS_API_MANAGEMENT_ACL
+      AttributeDefinitions:
+        - AttributeName: username
+          AttributeType: S
+      KeySchema:
+        - AttributeName: username
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+  LambdaValidateJWT:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ATLAS-API-TOKEN-VALIDATOR
+      Handler: app.app.lambda_handler
+      CodeUri: ../lambda/token_validator
+      Role: !Ref Role
+      Timeout: 10
+      Description: Validates user token
+      Environment:
+        Variables:
+          JWT_ALGORITHM: !Ref JwtAlgorithm
+          SECRETS_MANAGER_ID: !Ref SecretsManager
+          CORS_ALLOWED_METHODS: !Ref CORSMethods
+          CORS_ALLOWED_ORIGIN: !Ref CORSOrigin
+          CORS_ALLOWED_HEADERS: !Ref CORSHeaders
+
+  LambdaGenerateToken:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ATLAS-API-TOKEN-GENERATOR
+      Handler: app.app.lambda_handler
+      CodeUri: ../lambda/token
+      Role: !Ref Role
+      Timeout: 30
+      Description: A.T.L.A.S. authentication to generate user token
+      VpcConfig:
+        SecurityGroupIds:
+          !FindInMap [
+            AccountIdRegionMap,
+            !Ref AccountSelected,
+            SecurityGroupIds,
+          ]
+        SubnetIds:
+          !FindInMap [AccountIdRegionMap, !Ref AccountSelected, SubnetIds]
+      Environment:
+        Variables:
+          REGION: !Ref AWS::Region
+          SECRETS_MANAGER_ID: !Ref SecretsManager
+          DYNAMODB_TABLE_USERS_ACL: !Ref DynamoDBUsers
+          JWT_EXPIRATION_HOURS: !Ref JwtExpirationHours
+          JWT_ALGORITHM: !Ref JwtAlgorithm
+          CORS_ALLOWED_METHODS: !Ref CORSMethods
+          CORS_ALLOWED_ORIGIN: !Ref CORSOrigin
+          CORS_ALLOWED_HEADERS: !Ref CORSHeaders
+
+  LambdaDocs:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ATLAS-API-DOCS
+      Handler: app.app.lambda_handler
+      CodeUri: ../lambda/docs
+      Role: !Ref Role
+      Timeout: 30
+      Description: A.T.L.A.S. api docs redirect
+      Environment:
+        Variables:
+          REGION: !Sub ${AWS::Region}
+          DOMAIN_DOCS: !Ref DomainNameDocs
+          CORS_ALLOWED_METHODS: !Ref CORSMethods
+          CORS_ALLOWED_ORIGIN: !Ref CORSOrigin
+          CORS_ALLOWED_HEADERS: !Ref CORSHeaders
+
+  APIDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      RegionalCertificateArn: !Ref CertificateArn
+      DomainName: !Ref DomainName
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      SecurityPolicy: TLS_1_2
+
+  ApiGateway:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      ProtocolType: HTTP
+      Description: API for A.T.L.A.S. Platform
+      Name: atlas-api
+      CorsConfiguration:
+        AllowHeaders: !Split [',', !Ref CORSHeaders]
+        AllowMethods: !Split [',', !Ref CORSMethods]
+        AllowOrigins: !Split [',', !Ref CORSOrigin]
+
+  StageApiGateway:
+    Type: AWS::ApiGatewayV2::Stage
+    DependsOn:
+      - ApiGateway
+      - DeploymentApiGateway
+    Properties:
+      ApiId: !Ref ApiGateway
+      DeploymentId: !Ref DeploymentApiGateway
+      StageName: !Ref Stage
+      Description: V1 stage
+      AutoDeploy: 'true'
+
+  DeploymentApiGateway:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - RouteToken
+      - RouteDocs
+      - RouteDocsV1
+      - RouteAssetRegister
+      - RouteAssetFeature
+    Properties:
+      Description: A.T.L.A.S. API Deployment
+      ApiId: !Ref ApiGateway
+
+  MappingApiGateway:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    DependsOn:
+      - APIDomainName
+      - ApiGateway
+      - StageApiGateway
+    Properties:
+      DomainName: !Ref APIDomainName
+      ApiId: !Ref ApiGateway
+      Stage: !Ref StageApiGateway
+
+  AuthorizerJWT:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      Name: AuthorizerJWT
+      ApiId: !Ref ApiGateway
+      AuthorizerType: REQUEST
+      AuthorizerPayloadFormatVersion: '2.0'
+      IdentitySource:
+        - $request.header.Authorization
+      AuthorizerUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerLambdaArn}/invocations
+          - AuthorizerLambdaArn: !GetAtt LambdaValidateJWT.Arn
+      AuthorizerCredentialsArn: !Ref ApiGatewayRole
+
+  IntegrationToken:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      Description: Token generation endpoint integration
+      ConnectionType: INTERNET
+      CredentialsArn: !Ref ApiGatewayRole
+      PassthroughBehavior: WHEN_NO_MATCH
+      TimeoutInMillis: 29000
+      IntegrationMethod: POST
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !GetAtt LambdaGenerateToken.Arn
+
+  IntegrationDocs:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      Description: Docs endpoint integration
+      ConnectionType: INTERNET
+      CredentialsArn: !Ref ApiGatewayRole
+      PassthroughBehavior: WHEN_NO_MATCH
+      TimeoutInMillis: 29000
+      IntegrationMethod: POST
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !GetAtt LambdaDocs.Arn
+
+  IntegrationAssetRegister:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      Description: Asset register endpoint integration
+      ConnectionType: INTERNET
+      CredentialsArn: !Ref ApiGatewayRole
+      PassthroughBehavior: WHEN_NO_MATCH
+      TimeoutInMillis: 29000
+      IntegrationMethod: POST
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !ImportValue AtlasApiAssetRegisterArn
+
+  IntegrationAssetFeature:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      Description: Asset feature endpoint integration
+      ConnectionType: INTERNET
+      CredentialsArn: !Ref ApiGatewayRole
+      PassthroughBehavior: WHEN_NO_MATCH
+      TimeoutInMillis: 29000
+      IntegrationMethod: POST
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !ImportValue AtlasApiAssetFeatureArn
+
+  IntegrationClassificationClass:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      Description: Classification endpoint integration
+      ConnectionType: INTERNET
+      CredentialsArn: !Ref ApiGatewayRole
+      PassthroughBehavior: WHEN_NO_MATCH
+      TimeoutInMillis: 29000
+      IntegrationMethod: POST
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !ImportValue AtlasApiClassificationClassesArn
+
+  IntegrationFetchCountries:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      Description: Country endpoint integration
+      ConnectionType: INTERNET
+      CredentialsArn: !Ref ApiGatewayRole
+      PassthroughBehavior: WHEN_NO_MATCH
+      TimeoutInMillis: 29000
+      IntegrationMethod: POST
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !ImportValue AtlasApiFetchCountriesArn
+
+  IntegrationDownloadIndexesPlus:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      Description: Anbima indexes plus endpoint integration
+      ConnectionType: INTERNET
+      CredentialsArn: !Ref ApiGatewayRole
+      PassthroughBehavior: WHEN_NO_MATCH
+      TimeoutInMillis: 29000
+      IntegrationMethod: POST
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !ImportValue AtlasApiDownloadIndexesPlus
+
+  IntegrationCustodyAssets:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      Description: Custody assets integration
+      ConnectionType: INTERNET
+      CredentialsArn: !Ref ApiGatewayRole
+      PassthroughBehavior: WHEN_NO_MATCH
+      TimeoutInMillis: 29000
+      IntegrationMethod: POST
+      IntegrationType: AWS_PROXY
+      PayloadFormatVersion: '2.0'
+      IntegrationUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !ImportValue AtlasApiCustodyAssets
+
+  RouteToken:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationToken
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: POST /token
+      AuthorizationType: NONE
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationToken
+
+  RouteDocs:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationDocs
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: GET /
+      AuthorizationType: NONE
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationDocs
+
+  RouteDocsV1:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationDocs
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: GET /v1/docs
+      AuthorizationType: NONE
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationDocs
+
+  RouteAssetRegister:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationAssetRegister
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: POST /v1/asset/register
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref AuthorizerJWT
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationAssetRegister
+
+  RouteAssetFeature:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationAssetFeature
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: POST /v1/asset/feature/{market}/{feature}
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref AuthorizerJWT
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationAssetFeature
+
+  RouteClassificationClassModelType:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationClassificationClass
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: GET /v1/classification/classes/{model}/{type}
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref AuthorizerJWT
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationClassificationClass
+
+  RouteClassificationClassModel:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationClassificationClass
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: GET /v1/classification/classes/{model}
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref AuthorizerJWT
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationClassificationClass
+
+  RouteClassificationClass:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationClassificationClass
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: GET /v1/classification/classes
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref AuthorizerJWT
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationClassificationClass
+
+  RouteFetchCountries:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationFetchCountries
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: GET /v1/country
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref AuthorizerJWT
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationFetchCountries
+  
+  RouteDownloadIndexesPlus:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationDownloadIndexesPlus
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: GET /v1/anbima/index
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref AuthorizerJWT
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationDownloadIndexesPlus
+
+  RouteRefinitivCorporateActions:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - ApiGateway
+      - IntegrationCustodyAssets
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: POST /v1/custody/assets
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref AuthorizerJWT
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref IntegrationCustodyAssets

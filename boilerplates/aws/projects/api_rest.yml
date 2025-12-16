@@ -1,0 +1,306 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CloudFormation for infrastructure of Atlas Collector
+
+Parameters:
+  AccountSelected:
+    Type: String
+    Description: Account number and region name for resource mapping
+  Role:
+    Type: String
+    Description: Role used on aws lambdas.
+  ApiGatewayRole:
+    Type: String
+    Description: Role with permissions for api gateway
+  JwtExpirationHours:
+    Type: Number
+    Description: hours to expire jwt token
+  JwtAlgorithm:
+    Type: String
+    Description: Algorithm to encode/decode jwt tokens
+  CORSOrigin:
+    Type: String
+    Description: String of origins to return on lambda header.
+  CORSMethods:
+    Type: String
+    Description: String containing the HTTP methods to allow.
+  CORSHeaders:
+    Type: String
+    Description: String of headers to allow.
+  DomainName:
+    Type: String
+    Description: Api domain name
+  CertificateArn:
+    Type: String
+    Description: Certificate for domain name
+  Stage:
+    Type: String
+    Description: Current API stage name
+
+Mappings:
+  AccountIdRegionMap:
+    166714175444-us-east-1:
+      LogLevel: INFO
+      EnvironmentName: dev
+      SecurityGroupIds:
+        - sg-0d89e11889087f5e6
+      SubnetIds:
+        - subnet-01df436f599dacbeb
+        - subnet-0003a205c6739f3f6
+        - subnet-0a707f1c5d868a878
+    205153774795-us-east-1:
+      LogLevel: INFO
+      EnvironmentName: uat
+      SecurityGroupIds:
+        - sg-0e4476b71d7f6350b
+      SubnetIds:
+        - subnet-09284e38b84d90166
+        - subnet-03b89a922b2b1b2e4
+        - subnet-0c550bbaabd0178d3
+    760919482303-us-east-1:
+      LogLevel: ERROR
+      EnvironmentName: prd
+      SecurityGroupIds:
+        - sg-01da47d9704ac72b1
+      SubnetIds:
+        - subnet-0677af9cb6b851a2a
+        - subnet-0988899c55d8fa13f
+
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: python3.11
+    Environment:
+      Variables:
+        LOG_LEVEL:
+          !FindInMap [AccountIdRegionMap, !Ref AccountSelected, LogLevel]
+        POWERTOOLS_LOGGER_SAMPLE_RATE: 0.1
+        POWERTOOLS_LOGGER_LOG_EVENT: true
+        POWERTOOLS_METRICS_NAMESPACE: ATLAS-COLLECTOR-INFRASTRUCTURE
+        POWERTOOLS_SERVICE_NAME: ATLAS-COLLECTOR-INFRASTRUCTURE
+    Tags:
+      env: !Sub
+        - ${EnvName}
+        - EnvName:
+            !FindInMap [
+              AccountIdRegionMap,
+              !Ref AccountSelected,
+              EnvironmentName,
+            ]
+      service_group: atlas
+      service: atlas-collector-infrastructure
+
+Resources:
+
+  SecretsManagerCredentials:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Secret manager to maintain collector secrets
+      Name: atlas-collector
+
+  APIDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      RegionalCertificateArn: !Ref CertificateArn
+      DomainName: !Ref DomainName
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      SecurityPolicy: TLS_1_2
+
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: atlas-collector
+      Description: API for Atlas Collector
+      FailOnWarnings: 'true'
+      ApiKeySourceType: HEADER
+
+  DeploymentApiGateway:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiGateway
+      - MethodMiddleware
+    Properties:
+      RestApiId: !Ref ApiGateway
+
+  StageApiGateway:
+    Type: AWS::ApiGateway::Stage
+    DependsOn:
+      - ApiGateway
+      - DeploymentApiGateway
+    Properties:
+      RestApiId: !Ref ApiGateway
+      DeploymentId: !Ref DeploymentApiGateway
+      StageName: !Ref Stage
+      Description: V1 stage
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          ThrottlingRateLimit: 100
+          ThrottlingBurstLimit: 100
+
+  MappingApiGateway:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    DependsOn:
+      - APIDomainName
+      - ApiGateway
+      - StageApiGateway
+    Properties:
+      DomainName: !Ref APIDomainName
+      ApiId: !Ref ApiGateway
+      Stage: !Ref StageApiGateway
+
+  ResourceAPI:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      RestApiId: !Ref ApiGateway
+      PathPart: api
+
+  ResourceV1:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ResourceAPI
+      RestApiId: !Ref ApiGateway
+      PathPart: !Ref Stage
+
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - ApiGateway
+      - StageApiGateway
+    Properties:
+      ApiStages:
+        - ApiId: !Ref ApiGateway
+          Stage: !Ref StageApiGateway
+      Description: Thottle refinity request by api key.
+      Quota:
+        Limit: 1000
+        Period: DAY
+      UsagePlanName: refinity-throttle-usage-plan
+
+  ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn:
+      - DeploymentApiGateway
+    Properties:
+      Name: refinity-api-key
+      Enabled: true
+
+  UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    DependsOn:
+      - ApiKey
+      - UsagePlan
+    Properties:
+      KeyId: !Ref ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  ResourceMiddleware:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ResourceV1
+      RestApiId: !Ref ApiGateway
+      PathPart: middleware
+
+  ResourceMiddlewareAoi:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ResourceMiddleware
+      RestApiId: !Ref ApiGateway
+      PathPart: '{api}'
+
+  ResourceAnbimaMiddleware:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ResourceV1
+      RestApiId: !Ref ApiGateway
+      PathPart: anbima
+
+  ResourceAnbimaFeed:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ResourceAnbimaMiddleware
+      RestApiId: !Ref ApiGateway
+      PathPart: feed
+
+  MethodMiddleware:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref ResourceMiddlewareAoi
+      RestApiId: !Ref ApiGateway
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.path.api: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Credentials: !Ref ApiGatewayRole
+        PassthroughBehavior: WHEN_NO_MATCH
+        ContentHandling: CONVERT_TO_TEXT
+        RequestParameters:
+          integration.request.path.api: method.request.path.api
+        Uri:
+          Fn::Sub:
+            - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MiddlewareLambdaArn}/invocations
+            - MiddlewareLambdaArn: !ImportValue AtlasCollectorMiddlewareOrchestratorLambdaArn
+
+  MethodAnbimaFeed:
+    Type: AWS::ApiGateway::Method
+    DependsOn:
+      - AuthorizerAnbima
+    Properties:
+      AuthorizationType: CUSTOM
+      HttpMethod: POST
+      ResourceId: !Ref ResourceAnbimaFeed
+      RestApiId: !Ref ApiGateway
+      AuthorizerId: !Ref AuthorizerAnbima
+      ApiKeyRequired: false
+      RequestParameters:
+        method.request.path.api: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Credentials: !Ref ApiGatewayRole
+        PassthroughBehavior: WHEN_NO_MATCH
+        ContentHandling: CONVERT_TO_TEXT
+        RequestParameters:
+          integration.request.path.api: method.request.path.api
+        Uri:
+          Fn::Sub:
+            - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MiddlewareAnbimaLambdaArn}/invocations
+            - MiddlewareAnbimaLambdaArn: !ImportValue DatalakeAnbimaLambdaFeedArn
+
+  AuthorizerAnbima:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: AuthorizerAnbima
+      RestApiId: !Ref ApiGateway
+      Type: REQUEST
+      IdentitySource: method.request.header.Authorization
+      AuthorizerUri:
+        Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerLambdaArn}/invocations
+          - AuthorizerLambdaArn: !ImportValue AtlasCollectorAnbimaAuthorizerLambdaArn
+      AuthorizerCredentials: !Ref ApiGatewayRole
+
+Outputs:
+  SecretsManagerArn:
+    Value:
+      Ref: SecretsManagerCredentials
+    Export:
+      Name: AtlasCollectorSecretsManagerArn
+  ApiDomainName:
+    Value:
+      Ref: DomainName
+    Export:
+      Name: AtlasCollectorDomainName
+  ApiGatewayRestApiId:
+    Value:
+      Fn::GetAtt: [ ApiGateway, RestApiId ]
+    Export:
+      Name: AtlasCollectorApiGatewayRestApiId

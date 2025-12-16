@@ -1,0 +1,128 @@
+[
+    {
+        "function": "build_stacked_column_chart",
+        "args": {
+            "data": "service_pivot",
+            "sheet_name": "Macro",
+            "sheet_ref": "Service (Monthly)",
+            "position": "B8"
+        },
+        "write": true
+    },
+    {
+        "function": "build_line_chart",
+        "args": {
+            "data": "daily_pivot",
+            "sheet_name": "Macro",
+            "sheet_ref": "Resource (Daily)",
+            "position": "B30"
+        },
+        "write": true
+    },
+    {
+        "function": "build_single_line_chart",
+        "args": {
+            "data": "general_pivot",
+            "sheet_name": "Macro",
+            "sheet_ref": "General (Monthly)",
+            "position": "P30",
+            "col": 0
+        },
+        "write": true
+    },
+    {
+        "function": "build_distribution_pie_chart",
+        "args": {
+            "data": "service_distribution_df",
+            "sheet_name": "Macro",
+            "sheet_ref": "Service distribution",
+            "position": "V8"
+        },
+        "write": true
+    },
+    {
+        "function": "build_line_charts",
+        "args": {
+            "data": "services_daily",
+            "sheet_name": "Detail",
+            "position": "B8"
+        },
+        "write": true
+    },
+    {
+        "function": "build_top_resources_bar_charts",
+        "args": {
+            "data": "services_week",
+            "sheet_name": "Detail",
+            "position": "L8"
+        },
+        "write": true
+    },
+    {
+        "function": "build_top_resources_tables",
+        "args": {
+            "data": "services_week",
+            "sheet_name": "Detail",
+            "position": "V8"
+        },
+        "write": false
+    },
+    {
+        "function": "build_gain_loss_table",
+        "args": {
+            "data": "top_reduction",
+            "sheet_name": "Insights",
+            "title": "Maiores reduções ($)",
+            "position": "B8"
+        },
+        "write": false
+    },
+    {
+        "function": "build_gain_loss_table",
+        "args": {
+            "data": "top_increase",
+            "sheet_name": "Insights",
+            "title": "Maiores aumentos ($)",
+            "position": "Q8"
+        },
+        "write": false
+    },
+    {
+        "function": "build_gain_loss_table",
+        "args": {
+            "data": "top_percentage_reduction",
+            "sheet_name": "Insights",
+            "title": "Maiores reduções (%)",
+            "position": "B19"
+        },
+        "write": false
+    },
+    {
+        "function": "build_gain_loss_table",
+        "args": {
+            "data": "top_percentage_increase",
+            "sheet_name": "Insights",
+            "title": "Maiores aumentos (%)",
+            "position": "Q19"
+        },
+        "write": false
+    },
+    {
+        "function": "build_notes_table",
+        "args": {
+            "data": "simple_metrics",
+            "sheet_name": "Insights",
+            "position": "B30"
+        },
+        "write": false
+    },
+    {
+        "function": "build_optimization_table",
+        "args": {
+            "data": "top10_recommendations",
+            "sheet_name": "Insights",
+            "position": "Q30"
+        },
+        "write": false
+    }
+]
